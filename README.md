@@ -1,1 +1,1 @@
-View Readme in the M10 subdirectory. 
+Each subdirectory named "M##" has a seperate README.md file. Access each subdirectory to learn more about each module. 
