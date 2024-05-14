@@ -1,0 +1,29 @@
+1. 
+Selected unicam format: 1920x1080-pGAA
+Set up object and configure camera: 0.139
+Take image and save to drive: 0.323
+Take image and load into memeory: 0.004
+Save image from memory with opencv: 0.055
+Stop and reconfigure camera for higher resolution: 0.147
+Take higher resolution image and save to drive: 0.560
+Take higher resolution image and load into memory: 0.097
+Save higher resolution image from memory with opencv: 0.266
+
+4.
+Ranges:
+DCmin = 3 Theta min = 0
+DCmax = 14  Theta Max = 180 
+DC @7 = 90 degrees
+
+5.
+angle = arctan( y - height/2, x - width / 2)
+Where x and y are the coordinates of the center mass of the target object.
+If we were to have an image with the size 200x200 and coordinates at 120, 130
+
+angle = arctan(130 - 100, 120 - 100) = 56
+
+6.
+For the best values we used:
+Delay: .25
+Delta: .5 
+Nah, increasing did not effect the rate in which the images aer taken to affect the values used for delta. 
