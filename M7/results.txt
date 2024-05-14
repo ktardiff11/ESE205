@@ -1,0 +1,22 @@
+Lab 7
+4d.
+Lowest Duty Cycle: 14.5
+
+5.e calc_rpm
+By Hand:
+139 transitions/5.11 s * 1 rev/4 transitions * 60 s / 1 min = 408.023 rev/min
+
+From Program:
+408 RPM. 
+
+We did 5.11 s to get exactly 512 data points due to our delay of .01 seconds. 
+We did this in order to not modify our raw data for the FFT program. 
+
+
+est_rpm
+For the estimated RPM from the FFT plot we obtained a RPM of 405, for a duty cycle of 50%. 
+When comparing it to calc_rpm we had a pretty good estimation of the RPM. 
+Having a percentage difference of .745%
+
+(|405-408|/408)*100 =.735%
+
