@@ -1,0 +1,25 @@
+Photoresistor simpletest. py results 
+AD_pin: 0	Times: 5	Delay: 2
+Raw ADC Value: 509
+Raw ADC Value: 534
+Raw ADC Value: 874
+Raw ADC Value: 933
+Raw ADC Value: 499
+
+Resistance verified for 3.3k and 1k 
+
+put in series with 1k voltage divider
+Raw ADC Value: 254 Voltage:.819
+Raw ADC Value: 253 Voltage:.816
+Raw ADC Value: 253 Voltage:.816
+Raw ADC Value: 254 Voltage:.819
+Raw ADC Value: 253 Voltage:.816
+
+Flipping the resistor values 
+Raw ADC Value: 238 voltage: .7677
+Raw ADC Value: 237 voltage: .7645
+Raw ADC Value: 238 voltage: .7677
+Raw ADC Value: 237 voltage: .7645
+Raw ADC Value: 238 voltage: .7677
+
+bits from the adc val/1023 bits 3.3v
