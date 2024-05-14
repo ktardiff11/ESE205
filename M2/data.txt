@@ -1,0 +1,4 @@
+0	OFF
+3	OFF
+6	ON
+9	ON
