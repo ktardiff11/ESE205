@@ -1,0 +1,337 @@
+Option Explicit
+
+' =========================
+' YOUR SHEET MAPPING
+' =========================
+Private Const MPN_COL As String = "H"       ' MPN input cells you manually select
+Private Const DK_STOCK_COL As String = "R"  ' Digi-Key stock output
+Private Const MO_STOCK_COL As String = "S"  ' Mouser stock output
+
+' Throttle calls to avoid rate-limits
+Private Const DELAY_MS As Long = 350
+
+' Digi-Key OAuth cache
+Private gDkToken As String
+Private gDkTokenExpiresAt As Date
+
+' =========================
+' MAIN MACRO
+' =========================
+Public Sub UpdateSelectedMPNStock_H_to_RS()
+    Dim sel As Range, c As Range
+    Dim mpn As String
+    Dim dkStock As Variant, moStock As Variant
+    Dim ws As Worksheet
+    Dim dkCell As Range, moCell As Range
+
+    If TypeName(Selection) <> "Range" Then
+        MsgBox "Select the MPN cells in column " & MPN_COL & " first.", vbExclamation
+        Exit Sub
+    End If
+
+    Set sel = Selection
+    Set ws = sel.Worksheet
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    On Error GoTo CleanFail
+
+    For Each c In sel.Cells
+
+        ' Only act if the selected cell is in Column H
+        If c.Column = ws.Columns(MPN_COL).Column Then
+
+            mpn = Trim(CStr(c.Value))
+
+            If mpn <> "" Then
+
+                ' Output cells on the same row
+                Set dkCell = ws.Range(DK_STOCK_COL & c.Row)
+                Set moCell = ws.Range(MO_STOCK_COL & c.Row)
+
+                ' Fetch stock values
+                dkStock = DigiKey_StockByKeyword(mpn)
+                PauseMs DELAY_MS
+                moStock = Mouser_StockByPartNumber(mpn)
+                PauseMs DELAY_MS
+
+                ' Write into columns R and S
+                dkCell.Value = dkStock
+                moCell.Value = moStock
+
+                ' Clear old highlight
+                c.EntireRow.Interior.ColorIndex = xlNone
+
+                ' Highlight if either is exactly 0
+                If IsNumeric(dkStock) And CLng(dkStock) = 0 Then
+                    c.EntireRow.Interior.Color = RGB(255, 255, 120) ' yellow
+                End If
+                If IsNumeric(moStock) And CLng(moStock) = 0 Then
+                    c.EntireRow.Interior.Color = RGB(255, 255, 120) ' yellow
+                End If
+
+            End If
+        End If
+
+    Next c
+
+CleanExit:
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    Exit Sub
+
+CleanFail:
+    MsgBox "Macro failed: " & Err.Description, vbCritical
+    Resume CleanExit
+End Sub
+
+' =========================
+' CONFIG READERS (Config sheet)
+' =========================
+Private Function GetConfigValue(ByVal configCell As String) As String
+    GetConfigValue = Trim(CStr(ThisWorkbook.Worksheets("Config").Range(configCell).Value))
+End Function
+
+' =========================
+' MOUSER STOCK
+' =========================
+Private Function Mouser_StockByPartNumber(ByVal mpn As String) As Variant
+    On Error GoTo Fail
+
+    Dim apiKey As String
+    apiKey = GetConfigValue("B2") ' Mouser API key in Config!B2
+    If apiKey = "" Then
+        Mouser_StockByPartNumber = "NO_MOUSER_KEY"
+        Exit Function
+    End If
+
+    Dim url As String
+    url = "https://api.mouser.com/api/v1/search/partnumber?apikey=" & URLEncode(apiKey)
+
+    Dim body As String
+    body = "{""SearchByPartnumberRequest"":{""MouserPartNumber"":""" & JsonEscape(mpn) & """,""PartSearchOptions"":""string"",""SearchOptions"":""string""}}"
+
+    Dim resp As String
+    resp = HttpPostJson(url, body)
+
+    Dim json As Object
+    Set json = JsonConverter.ParseJson(resp)
+
+    Dim availStr As String
+    availStr = ""
+
+    If Not json Is Nothing Then
+        If json.Exists("SearchResults") Then
+            If json("SearchResults").Exists("Parts") Then
+                If json("SearchResults")("Parts").Count > 0 Then
+                    availStr = CStr(json("SearchResults")("Parts")(1)("Availability"))
+                End If
+            End If
+        End If
+    End If
+
+    If availStr = "" Then
+        Mouser_StockByPartNumber = "NO_MATCH"
+        Exit Function
+    End If
+
+    Mouser_StockByPartNumber = ExtractFirstInteger(availStr)
+    Exit Function
+
+Fail:
+    Mouser_StockByPartNumber = "MO_ERR"
+End Function
+
+' =========================
+' DIGI-KEY STOCK
+' =========================
+Private Function DigiKey_StockByKeyword(ByVal keyword As String) As Variant
+    On Error GoTo Fail
+
+    Dim clientId As String, clientSecret As String
+    clientId = GetConfigValue("B3")     ' Digi-Key Client ID in Config!B3
+    clientSecret = GetConfigValue("B4") ' Digi-Key Client Secret in Config!B4
+
+    If clientId = "" Or clientSecret = "" Then
+        DigiKey_StockByKeyword = "NO_DK_KEY"
+        Exit Function
+    End If
+
+    Dim token As String
+    token = DigiKey_GetAccessToken(clientId, clientSecret)
+    If token = "" Then
+        DigiKey_StockByKeyword = "DK_AUTH_FAIL"
+        Exit Function
+    End If
+
+    Dim url As String
+    url = "https://api.digikey.com/Search/v3/Products/Keyword"
+
+    Dim body As String
+    body = "{""Keywords"":""" & JsonEscape(keyword) & """,""RecordCount"":1,""RecordStartPosition"":0}"
+
+    Dim resp As String
+    resp = HttpPostJson_DigiKey(url, body, token, clientId)
+
+    Dim json As Object
+    Set json = JsonConverter.ParseJson(resp)
+
+    Dim qty As Variant
+    qty = "NO_MATCH"
+
+    If json.Exists("Products") Then
+        If json("Products").Count > 0 Then
+            If json("Products")(1).Exists("QuantityAvailable") Then
+                qty = CLng(json("Products")(1)("QuantityAvailable"))
+            End If
+        End If
+    End If
+
+    DigiKey_StockByKeyword = qty
+    Exit Function
+
+Fail:
+    DigiKey_StockByKeyword = "DK_ERR"
+End Function
+
+Private Function DigiKey_GetAccessToken(ByVal clientId As String, ByVal clientSecret As String) As String
+    On Error GoTo Fail
+
+    If gDkToken <> "" Then
+        If Now < gDkTokenExpiresAt Then
+            DigiKey_GetAccessToken = gDkToken
+            Exit Function
+        End If
+    End If
+
+    Dim url As String
+    url = "https://api.digikey.com/v1/oauth2/token"
+
+    Dim form As String
+    form = "client_id=" & URLEncode(clientId) & _
+           "&client_secret=" & URLEncode(clientSecret) & _
+           "&grant_type=client_credentials"
+
+    Dim resp As String
+    resp = HttpPostForm(url, form)
+
+    Dim json As Object
+    Set json = JsonConverter.ParseJson(resp)
+
+    If json.Exists("access_token") Then
+        gDkToken = CStr(json("access_token"))
+
+        Dim expiresIn As Long
+        expiresIn = CLng(json("expires_in"))
+
+        gDkTokenExpiresAt = DateAdd("s", expiresIn - 15, Now)
+
+        DigiKey_GetAccessToken = gDkToken
+        Exit Function
+    End If
+
+Fail:
+    DigiKey_GetAccessToken = ""
+End Function
+
+' =========================
+' HTTP HELPERS
+' =========================
+Private Function HttpPostJson(ByVal url As String, ByVal jsonBody As String) As String
+    Dim http As Object
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+
+    http.Open "POST", url, False
+    http.SetRequestHeader "Content-Type", "application/json"
+    http.SetRequestHeader "Accept", "application/json"
+    http.Send jsonBody
+
+    HttpPostJson = http.ResponseText
+End Function
+
+Private Function HttpPostJson_DigiKey(ByVal url As String, ByVal jsonBody As String, ByVal token As String, ByVal clientId As String) As String
+    Dim http As Object
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+
+    http.Open "POST", url, False
+    http.SetRequestHeader "Content-Type", "application/json"
+    http.SetRequestHeader "Accept", "application/json"
+
+    http.SetRequestHeader "Authorization", "Bearer " & token
+    http.SetRequestHeader "X-DIGIKEY-Client-Id", clientId
+
+    http.SetRequestHeader "X-DIGIKEY-Locale-Site", "US"
+    http.SetRequestHeader "X-DIGIKEY-Locale-Language", "en"
+    http.SetRequestHeader "X-DIGIKEY-Locale-Currency", "USD"
+
+    http.Send jsonBody
+
+    HttpPostJson_DigiKey = http.ResponseText
+End Function
+
+Private Function HttpPostForm(ByVal url As String, ByVal formBody As String) As String
+    Dim http As Object
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+
+    http.Open "POST", url, False
+    http.SetRequestHeader "Content-Type", "application/x-www-form-urlencoded"
+    http.SetRequestHeader "Accept", "application/json"
+    http.Send formBody
+
+    HttpPostForm = http.ResponseText
+End Function
+
+' =========================
+' UTILITIES
+' =========================
+Private Sub PauseMs(ByVal ms As Long)
+    Dim t As Double
+    t = Timer
+    Do While Timer < t + ms / 1000#
+        DoEvents
+    Loop
+End Sub
+
+Private Function ExtractFirstInteger(ByVal s As String) As Long
+    Dim i As Long, ch As String, digits As String
+    digits = ""
+
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If (ch >= "0" And ch <= "9") Then
+            digits = digits & ch
+        End If
+    Next i
+
+    If digits = "" Then
+        ExtractFirstInteger = 0
+    Else
+        ExtractFirstInteger = CLng(digits)
+    End If
+End Function
+
+Private Function URLEncode(ByVal s As String) As String
+    Dim i As Long, ch As String, out As String
+    out = ""
+
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        Select Case Asc(ch)
+            Case 48 To 57, 65 To 90, 97 To 122
+                out = out & ch
+            Case 45, 46, 95, 126
+                out = out & ch
+            Case Else
+                out = out & "%" & Right$("0" & Hex(Asc(ch)), 2)
+        End Select
+    Next i
+
+    URLEncode = out
+End Function
+
+Private Function JsonEscape(ByVal s As String) As String
+    s = Replace(s, "\", "\\")
+    s = Replace(s, """", "\""")
+    JsonEscape = s
+End Function
